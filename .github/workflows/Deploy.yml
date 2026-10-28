@@ -1,0 +1,100 @@
+
+name: Build and Deploy OpticFlow
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'optic-platform.zip'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: opticflow-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: optic-platform/package-lock.json
+
+      - name: Extract project ZIP
+        run: |
+          set -e
+          if [ ! -f optic-platform.zip ]; then
+            echo "ERROR: optic-platform.zip not found in repository root."
+            exit 1
+          fi
+          mkdir -p extracted
+          unzip -q optic-platform.zip -d extracted
+          echo "Extracted files:"
+          find extracted -maxdepth 3 -type f | head -80
+
+      - name: Locate project root
+        run: |
+          set -e
+          PROJECT_DIR="$(find extracted -name package.json -not -path '*/node_modules/*' -printf '%h\n' | head -1)"
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "ERROR: package.json not found inside ZIP."
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project root: $PROJECT_DIR"
+
+      - name: Install dependencies
+        run: |
+          cd "$PROJECT_DIR"
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Build project
+        run: |
+          cd "$PROJECT_DIR"
+          npm run build
+
+      - name: Verify build output
+        run: |
+          set -e
+          if [ ! -f "$PROJECT_DIR/dist/index.html" ]; then
+            echo "ERROR: dist/index.html not found. Check the Vite build configuration."
+            exit 1
+          fi
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ env.PROJECT_DIR }}/dist
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
